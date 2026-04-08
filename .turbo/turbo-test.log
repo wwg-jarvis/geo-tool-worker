@@ -1,0 +1,61 @@
+
+> worker@0.1.0 test /Users/jarvis/.paperclip/instances/default/projects/b9d98b55-006a-4cab-848e-2a57ac6c4949/00e11bde-859e-4c0a-afab-832125354861/_default/apps/worker
+> vitest run --coverage
+
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+ RUN  v1.6.1 /Users/jarvis/.paperclip/instances/default/projects/b9d98b55-006a-4cab-848e-2a57ac6c4949/00e11bde-859e-4c0a-afab-832125354861/_default/apps/worker
+      Coverage enabled with v8
+
+stdout | src/__tests__/scan.test.ts > runScanJob > queries the chatgpt adapter and inserts a scan result
+[scan] start engine=chatgpt brand=brand-1 query=query-1
+[scan] stored engine=chatgpt brand=brand-1 query=query-1 scan=scan-1
+[scan] extraction done detected=false type=null scan=scan-1
+[scan] visibility score updated brand=brand-1 query=query-1
+
+stdout | src/__tests__/scan.test.ts > runScanJob > queries the claude adapter and inserts a scan result
+[scan] start engine=claude brand=brand-1 query=query-1
+[scan] stored engine=claude brand=brand-1 query=query-1 scan=scan-1
+[scan] extraction done detected=false type=null scan=scan-1
+[scan] visibility score updated brand=brand-1 query=query-1
+
+stdout | src/__tests__/scan.test.ts > runScanJob > queries the perplexity adapter and inserts a scan result
+[scan] start engine=perplexity brand=brand-1 query=query-1
+[scan] stored engine=perplexity brand=brand-1 query=query-1 scan=scan-1
+[scan] extraction done detected=false type=null scan=scan-1
+[scan] visibility score updated brand=brand-1 query=query-1
+
+stdout | src/__tests__/scan.test.ts > runScanJob > re-throws adapter errors so pg-boss can retry
+[scan] start engine=chatgpt brand=brand-1 query=query-1
+
+stdout | src/__tests__/scan.test.ts > runScanJob > throws NonRetryableError when brand is not found after INSERT
+[scan] start engine=chatgpt brand=brand-missing query=query-1
+[scan] stored engine=chatgpt brand=brand-missing query=query-1 scan=scan-1
+
+ ✓ src/__tests__/scan.test.ts  (8 tests) 10ms
+ ✓ src/__tests__/adapter.test.ts  (2 tests) 1004ms
+
+ Test Files  2 passed (2)
+      Tests  10 passed (10)
+   Start at  12:00:23
+   Duration  1.26s (transform 72ms, setup 0ms, collect 83ms, tests 1.01s, environment 0ms, prepare 163ms)
+
+ % Coverage report from v8
+----------------|---------|----------|---------|---------|----------------------
+File            | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s    
+----------------|---------|----------|---------|---------|----------------------
+All files       |   35.96 |    56.14 |      50 |   35.96 |                      
+ src            |       0 |        0 |       0 |       0 |                      
+  db.ts         |       0 |        0 |       0 |       0 | 1-13                 
+  index.ts      |       0 |        0 |       0 |       0 | 1-65                 
+ src/adapters   |   23.35 |       70 |      25 |   23.35 |                      
+  anthropic.ts  |       0 |        0 |       0 |       0 | 1-27                 
+  interface.ts  |     100 |      100 |     100 |     100 |                      
+  openai.ts     |       0 |        0 |       0 |       0 | 1-27                 
+  perplexity.ts |       0 |        0 |       0 |       0 | 1-51                 
+ src/jobs       |   42.11 |    55.55 |   66.66 |   42.11 |                      
+  digest.ts     |       0 |        0 |       0 |       0 | 1-183                
+  extraction.ts |   55.27 |       50 |     100 |   55.27 | ...-66,74-83,142-199 
+  notify.ts     |    20.9 |       10 |      25 |    20.9 | ...0,115-158,173-176 
+  scan.ts       |   92.09 |    79.16 |     100 |   92.09 | 46-47,58-60,163-171  
+----------------|---------|----------|---------|---------|----------------------
