@@ -1,6 +1,8 @@
 import type { Pool } from "pg";
 import type PgBoss from "pg-boss";
 import type { ScanEngine } from "../types/supabase";
+
+const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY) || 5;
 import { OpenAIAdapter } from "../adapters/openai";
 import { AnthropicAdapter } from "../adapters/anthropic";
 import { PerplexityAdapter } from "../adapters/perplexity";
@@ -128,10 +130,15 @@ export async function runScanJob(pool: Pool, data: ScanJobData): Promise<void> {
 
 /**
  * Picks up pending rows from the scan_requests table (inserted by the Next.js
- * trigger API) and fans them out into pg-boss scan jobs.
- * Called on a short poll interval so manual scans are processed quickly.
+ * trigger API) and runs the scan jobs directly with bounded concurrency.
+ *
+ * We deliberately do NOT route through pg-boss here because pg-boss requires a
+ * persistent/direct database connection and will crash if the DATABASE_URL
+ * points to a transaction pooler (e.g. Supabase Supavisor on port 6543).
+ * Running jobs inline keeps the manual-scan path working regardless of the
+ * connection type configured in Railway.
  */
-export async function processManualScanRequests(pool: Pool, boss: PgBoss): Promise<void> {
+export async function processManualScanRequests(pool: Pool): Promise<void> {
   // Atomically claim pending rows by updating status to 'processing'
   const { rows: requests } = await pool.query<{ id: string; brand_id: string }>(
     `UPDATE scan_requests
@@ -154,25 +161,38 @@ export async function processManualScanRequests(pool: Pool, boss: PgBoss): Promi
         [request.brand_id],
       );
 
-      let enqueued = 0;
+      // Build the full job list: all queries × all engines for this brand
+      const jobs: ScanJobData[] = [];
       for (const query of queries) {
         for (const engine of ENGINES) {
-          const jobData: ScanJobData = {
+          jobs.push({
             brandId: request.brand_id,
             queryId: query.id,
             queryText: query.query_text,
             engine,
-          };
-          try {
-            await boss.send("scan", jobData);
-            enqueued++;
-          } catch (err) {
-            const error = err instanceof Error ? err : new Error(String(err));
-            console.error("[scan] failed to enqueue job from scan_request", {
+          });
+        }
+      }
+
+      // Run jobs with bounded concurrency using chunked Promise.allSettled
+      let succeeded = 0;
+      let failed = 0;
+      for (let i = 0; i < jobs.length; i += SCAN_CONCURRENCY) {
+        const chunk = jobs.slice(i, i + SCAN_CONCURRENCY);
+        const results = await Promise.allSettled(
+          chunk.map((jobData) => runScanJob(pool, jobData)),
+        );
+        for (const result of results) {
+          if (result.status === "fulfilled") {
+            succeeded++;
+          } else {
+            failed++;
+            const error = result.reason instanceof Error
+              ? result.reason
+              : new Error(String(result.reason));
+            console.error("[scan] job failed in manual scan_request", {
               requestId: request.id,
               brandId: request.brand_id,
-              queryId: query.id,
-              engine,
               error: error.message,
             });
           }
@@ -184,7 +204,9 @@ export async function processManualScanRequests(pool: Pool, boss: PgBoss): Promi
         [request.id],
       );
 
-      console.log(`[scan] processed scan_request ${request.id}: enqueued ${enqueued} jobs`);
+      console.log(
+        `[scan] processed scan_request ${request.id}: ${succeeded} succeeded, ${failed} failed`,
+      );
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       console.error("[scan] error processing scan_request", {
