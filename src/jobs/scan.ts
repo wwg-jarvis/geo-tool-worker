@@ -1,12 +1,13 @@
 import type { Pool } from "pg";
 import type PgBoss from "pg-boss";
 import type { ScanEngine } from "../types/supabase";
-
-const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY) || 5;
+import { createAdminClient } from "../lib/supabase";
 import { OpenAIAdapter } from "../adapters/openai";
 import { AnthropicAdapter } from "../adapters/anthropic";
 import { PerplexityAdapter } from "../adapters/perplexity";
 import type { EngineAdapter } from "../adapters/interface";
+
+const SCAN_CONCURRENCY = Number(process.env.SCAN_CONCURRENCY) || 5;
 import {
   extractMentions,
   persistMentionResult,
@@ -132,38 +133,43 @@ export async function runScanJob(pool: Pool, data: ScanJobData): Promise<void> {
  * Picks up pending rows from the scan_requests table (inserted by the Next.js
  * trigger API) and runs the scan jobs directly with bounded concurrency.
  *
- * We deliberately do NOT route through pg-boss here because pg-boss requires a
- * persistent/direct database connection and will crash if the DATABASE_URL
+ * Uses the Supabase admin client for scan_requests / monitoring_queries so that
+ * DATABASE_URL is not required for this path — it works even when DATABASE_URL
  * points to a transaction pooler (e.g. Supabase Supavisor on port 6543).
- * Running jobs inline keeps the manual-scan path working regardless of the
- * connection type configured in Railway.
+ * Jobs are executed inline via runScanJob to avoid any pg-boss dependency here.
  */
 export async function processManualScanRequests(pool: Pool): Promise<void> {
-  // Atomically claim pending rows by updating status to 'processing'
-  const { rows: requests } = await pool.query<{ id: string; brand_id: string }>(
-    `UPDATE scan_requests
-     SET status = 'processing'
-     WHERE id IN (
-       SELECT id FROM scan_requests WHERE status = 'pending'
-       ORDER BY created_at ASC
-       FOR UPDATE SKIP LOCKED
-     )
-     RETURNING id, brand_id`,
-  );
+  const supabase = createAdminClient();
 
-  if (requests.length === 0) return;
+  // Claim pending rows by updating status to 'processing'
+  const { data: requests, error: claimError } = await supabase
+    .from("scan_requests")
+    .update({ status: "processing" })
+    .eq("status", "pending")
+    .select("id, brand_id");
+
+  if (claimError) {
+    console.error("[scan] failed to claim scan_requests", { error: claimError.message });
+    return;
+  }
+
+  if (!requests || requests.length === 0) return;
 
   for (const request of requests) {
     try {
-      const { rows: queries } = await pool.query<{ id: string; query_text: string }>(
-        `SELECT id, query_text FROM monitoring_queries
-         WHERE brand_id = $1 AND is_active = true`,
-        [request.brand_id],
-      );
+      const { data: queries, error: queryError } = await supabase
+        .from("monitoring_queries")
+        .select("id, query_text")
+        .eq("brand_id", request.brand_id)
+        .eq("is_active", true);
+
+      if (queryError) {
+        throw new Error(queryError.message);
+      }
 
       // Build the full job list: all queries × all engines for this brand
       const jobs: ScanJobData[] = [];
-      for (const query of queries) {
+      for (const query of queries ?? []) {
         for (const engine of ENGINES) {
           jobs.push({
             brandId: request.brand_id,
@@ -199,10 +205,10 @@ export async function processManualScanRequests(pool: Pool): Promise<void> {
         }
       }
 
-      await pool.query(
-        `UPDATE scan_requests SET status = 'done', processed_at = now() WHERE id = $1`,
-        [request.id],
-      );
+      await supabase
+        .from("scan_requests")
+        .update({ status: "done", processed_at: new Date().toISOString() })
+        .eq("id", request.id);
 
       console.log(
         `[scan] processed scan_request ${request.id}: ${succeeded} succeeded, ${failed} failed`,
@@ -214,10 +220,10 @@ export async function processManualScanRequests(pool: Pool): Promise<void> {
         brandId: request.brand_id,
         error: error.message,
       });
-      await pool.query(
-        `UPDATE scan_requests SET status = 'failed', error_message = $2 WHERE id = $1`,
-        [request.id, error.message],
-      );
+      await supabase
+        .from("scan_requests")
+        .update({ status: "failed", error_message: error.message })
+        .eq("id", request.id);
     }
   }
 }

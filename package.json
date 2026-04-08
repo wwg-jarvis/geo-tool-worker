@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",
+    "@supabase/supabase-js": "^2.42.0",
     "fastest-levenshtein": "^1.0.16",
     "openai": "^4.28.0",
     "pg": "^8.11.0",
